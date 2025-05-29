@@ -1,99 +1,107 @@
-
-from flask import Flask, request
+import os
 import cv2
 import numpy as np
-import os
-from deepface import DeepFace
+from flask import Flask, request, jsonify
 import mediapipe as mp
 import requests
 
 app = Flask(__name__)
 
-# Configuración de WhatsApp (CallMeBot)
-WHATSAPP_NUMBER = '+51902697385'
-API_KEY = '2408114'
+# Configuración de WhatsApp con CallMeBot
+WHATSAPP_API_URL = "https://api.callmebot.com/whatsapp.php"
+PHONE_NUMBER = "+51902697385"
+API_KEY = "2408114"
 
-# Ruta base donde están las imágenes de referencia
-BASE_PATH = 'base_rostros'
-
-# Inicializar MediaPipe Face Mesh
+# Inicializa MediaPipe
 mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True)
+face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True)
 
-# Cargar rostros registrados
-def cargar_rostros_base():
-    rostros_db = {}
-    for archivo in os.listdir(BASE_PATH):
-        if archivo.endswith(('.jpg', '.png')):
-            nombre = os.path.splitext(archivo)[0]
-            path = os.path.join(BASE_PATH, archivo)
-            rostros_db[nombre] = cv2.imread(path)
-    return rostros_db
+# Carga de imágenes de rostros registrados
+known_encodings = []
+known_names = []
 
-rostros_db = cargar_rostros_base()
+def encode_face(image):
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb)
+    if results.multi_face_landmarks:
+        landmarks = results.multi_face_landmarks[0]
+        coords = [(lm.x, lm.y, lm.z) for lm in landmarks.landmark]
+        return np.array(coords).flatten()
+    return None
 
-# Detección de guiño
-def detectar_guiño(imagen):
-    rgb = cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB)
-    resultados = face_mesh.process(rgb)
-    if not resultados.multi_face_landmarks:
+def load_known_faces():
+    for filename in os.listdir("base_rostros"):
+        if filename.endswith(".jpg") or filename.endswith(".png"):
+            img_path = os.path.join("base_rostros", filename)
+            img = cv2.imread(img_path)
+            encoding = encode_face(img)
+            if encoding is not None:
+                known_encodings.append(encoding)
+                known_names.append(filename.split(".")[0])
+
+def compare_faces(encoding):
+    for i, known_encoding in enumerate(known_encodings):
+        distance = np.linalg.norm(known_encoding - encoding)
+        if distance < 0.08:  # Umbral ajustado para coincidencia
+            return known_names[i]
+    return None
+
+def detectar_guiño(image):
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb)
+    if not results.multi_face_landmarks:
         return False
 
-    for rostro in resultados.multi_face_landmarks:
-        ojo_izq = [rostro.landmark[i] for i in [362, 385, 387, 263, 373, 380]]
-        ojo_der = [rostro.landmark[i] for i in [33, 160, 158, 133, 153, 144]]
+    landmarks = results.multi_face_landmarks[0].landmark
 
-        def apertura_ojo(ojo):
-            vertical = np.linalg.norm(np.array([ojo[1].x, ojo[1].y]) - np.array([ojo[5].x, ojo[5].y]))
-            horizontal = np.linalg.norm(np.array([ojo[0].x, ojo[0].y]) - np.array([ojo[3].x, ojo[3].y]))
-            return vertical / horizontal if horizontal != 0 else 0
+    # Índices para el ojo derecho y ojo izquierdo
+    eye_indices = {
+        "left": [33, 159],    # superior, inferior ojo izquierdo
+        "right": [362, 386]   # superior, inferior ojo derecho
+    }
 
-        apertura_izq = apertura_ojo(ojo_izq)
-        apertura_der = apertura_ojo(ojo_der)
+    def ojo_cerrado(p1, p2):
+        y1 = landmarks[p1].y
+        y2 = landmarks[p2].y
+        return abs(y1 - y2) < 0.015
 
-        if abs(apertura_izq - apertura_der) > 0.15:
-            return True
-    return False
+    izquierdo = ojo_cerrado(*eye_indices["left"])
+    derecho = ojo_cerrado(*eye_indices["right"])
 
-# Enviar mensaje por WhatsApp
-def enviar_mensaje(mensaje):
-    url = f'https://api.callmebot.com/whatsapp.php?phone={WHATSAPP_NUMBER}&text={mensaje}&apikey={API_KEY}'
-    try:
-        requests.get(url)
-    except Exception as e:
-        print(f"❌ Error al enviar WhatsApp: {e}")
+    # Detectar si uno está cerrado y el otro abierto
+    return (izquierdo and not derecho) or (derecho and not izquierdo)
 
-@app.route('/')
-def index():
-    return 'Servidor activo ✅'
+@app.route('/upload', methods=['POST'])
+def upload_image():
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image provided'}), 400
 
-@app.route('/recibir', methods=['POST'])
-def recibir():
-    if 'imagen' not in request.files:
-        return {'error': 'No se envió la imagen'}, 400
+    file = request.files['image']
+    image = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
 
-    archivo = request.files['imagen']
-    img_np = np.frombuffer(archivo.read(), np.uint8)
-    imagen = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+    encoding = encode_face(image)
+    if encoding is None:
+        return jsonify({'status': 'No se detectó rostro'}), 400
 
-    try:
-        resultado = DeepFace.find(img_path=imagen, db_path=BASE_PATH, enforce_detection=False)
-        if resultado[0].shape[0] > 0:
-            nombre = resultado[0].iloc[0]['identity'].split(os.sep)[-1].split('.')[0]
-            guiño = detectar_guiño(imagen)
-            if guiño:
-                mensaje = f"⚠️ ALARMA: Posible emergencia detectada en {nombre.upper()} (guiño detectado)"
-                enviar_mensaje(mensaje)
-                return {'estado': 'alerta', 'persona': nombre}
-            else:
-                mensaje = f"✅ Acceso autorizado para {nombre.upper()} (sin guiño)"
-                enviar_mensaje(mensaje)
-                return {'estado': 'autorizado', 'persona': nombre}
-        else:
-            return {'estado': 'desconocido'}, 200
-    except Exception as e:
-        print("Error en reconocimiento:", e)
-        return {'error': 'Fallo en el procesamiento'}, 500
+    nombre = compare_faces(encoding)
+    guiño = detectar_guiño(image)
+
+    if nombre and guiño:
+        mensaje = f"⚠️ Emergencia detectada en {nombre}. Se detectó un guiño sospechoso."
+    elif nombre:
+        mensaje = f"✅ Acceso autorizado para {nombre}. Sin signos de emergencia."
+    else:
+        mensaje = "❌ Rostro no reconocido. Acceso denegado."
+
+    # Enviar mensaje por WhatsApp
+    requests.get(WHATSAPP_API_URL, params={
+        "phone": PHONE_NUMBER,
+        "text": mensaje,
+        "apikey": API_KEY
+    })
+
+    return jsonify({'status': mensaje})
 
 if __name__ == '__main__':
+    load_known_faces()
     app.run(host='0.0.0.0', port=10000)
