@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: timbre-inteligente
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: "python app.py"
+    autoDeploy: true
+    envVars: []
