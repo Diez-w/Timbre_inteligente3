@@ -1,107 +1,68 @@
-import os
 import cv2
+import os
 import numpy as np
 from flask import Flask, request, jsonify
 import mediapipe as mp
-import requests
+from PIL import Image
+from datetime import datetime
 
 app = Flask(__name__)
 
-# Configuración de WhatsApp con CallMeBot
-WHATSAPP_API_URL = "https://api.callmebot.com/whatsapp.php"
-PHONE_NUMBER = "+51902697385"
-API_KEY = "2408114"
+mp_face_detection = mp.solutions.face_detection
+mp_drawing = mp.solutions.drawing_utils
 
-# Inicializa MediaPipe
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True)
+known_faces = {}
+face_detector = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
 
-# Carga de imágenes de rostros registrados
-known_encodings = []
-known_names = []
-
-def encode_face(image):
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb)
-    if results.multi_face_landmarks:
-        landmarks = results.multi_face_landmarks[0]
-        coords = [(lm.x, lm.y, lm.z) for lm in landmarks.landmark]
-        return np.array(coords).flatten()
-    return None
-
+# Cargar rostros conocidos desde la carpeta base_rostros
 def load_known_faces():
     for filename in os.listdir("base_rostros"):
-        if filename.endswith(".jpg") or filename.endswith(".png"):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             img_path = os.path.join("base_rostros", filename)
             img = cv2.imread(img_path)
-            encoding = encode_face(img)
-            if encoding is not None:
-                known_encodings.append(encoding)
-                known_names.append(filename.split(".")[0])
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            results = face_detector.process(img_rgb)
+            if results.detections:
+                known_faces[filename] = img_rgb
+            else:
+                print(f"No se detectó rostro en {filename}")
 
-def compare_faces(encoding):
-    for i, known_encoding in enumerate(known_encodings):
-        distance = np.linalg.norm(known_encoding - encoding)
-        if distance < 0.08:  # Umbral ajustado para coincidencia
-            return known_names[i]
-    return None
+load_known_faces()
 
-def detectar_guiño(image):
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb)
-    if not results.multi_face_landmarks:
-        return False
+# Comparar dos imágenes usando histogramas como método simple
+def is_match(face1, face2):
+    hist1 = cv2.calcHist([face1], [0], None, [256], [0, 256])
+    hist2 = cv2.calcHist([face2], [0], None, [256], [0, 256])
+    score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+    return score > 0.8
 
-    landmarks = results.multi_face_landmarks[0].landmark
+@app.route('/reconocer', methods=['POST'])
+def reconocer():
+    if 'foto' not in request.files:
+        return jsonify({"error": "No se recibió ninguna imagen"}), 400
 
-    # Índices para el ojo derecho y ojo izquierdo
-    eye_indices = {
-        "left": [33, 159],    # superior, inferior ojo izquierdo
-        "right": [362, 386]   # superior, inferior ojo derecho
-    }
+    file = request.files['foto']
+    img = Image.open(file.stream).convert('RGB')
+    frame = np.array(img)
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-    def ojo_cerrado(p1, p2):
-        y1 = landmarks[p1].y
-        y2 = landmarks[p2].y
-        return abs(y1 - y2) < 0.015
+    results = face_detector.process(frame_rgb)
 
-    izquierdo = ojo_cerrado(*eye_indices["left"])
-    derecho = ojo_cerrado(*eye_indices["right"])
+    if not results.detections:
+        return jsonify({"resultado": "No se detectó ningún rostro"}), 200
 
-    # Detectar si uno está cerrado y el otro abierto
-    return (izquierdo and not derecho) or (derecho and not izquierdo)
+    for detection in results.detections:
+        bboxC = detection.location_data.relative_bounding_box
+        ih, iw, _ = frame.shape
+        x, y, w, h = int(bboxC.xmin * iw), int(bboxC.ymin * ih), \
+                     int(bboxC.width * iw), int(bboxC.height * ih)
+        face_img = frame[y:y+h, x:x+w]
 
-@app.route('/upload', methods=['POST'])
-def upload_image():
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image provided'}), 400
+        for name, known_img in known_faces.items():
+            if is_match(face_img, known_img):
+                return jsonify({"resultado": f"Rostro reconocido: {name}"}), 200
 
-    file = request.files['image']
-    image = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
-
-    encoding = encode_face(image)
-    if encoding is None:
-        return jsonify({'status': 'No se detectó rostro'}), 400
-
-    nombre = compare_faces(encoding)
-    guiño = detectar_guiño(image)
-
-    if nombre and guiño:
-        mensaje = f"⚠️ Emergencia detectada en {nombre}. Se detectó un guiño sospechoso."
-    elif nombre:
-        mensaje = f"✅ Acceso autorizado para {nombre}. Sin signos de emergencia."
-    else:
-        mensaje = "❌ Rostro no reconocido. Acceso denegado."
-
-    # Enviar mensaje por WhatsApp
-    requests.get(WHATSAPP_API_URL, params={
-        "phone": PHONE_NUMBER,
-        "text": mensaje,
-        "apikey": API_KEY
-    })
-
-    return jsonify({'status': mensaje})
+    return jsonify({"resultado": "Rostro no reconocido"}), 200
 
 if __name__ == '__main__':
-    load_known_faces()
-    app.run(host='0.0.0.0', port=10000)
+    app.run(host='0.0.0.0', port=5000)
