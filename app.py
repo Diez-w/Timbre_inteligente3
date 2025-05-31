@@ -10,6 +10,7 @@ import io
 
 app = Flask(__name__)
 
+# Inicialización de MediaPipe
 mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh = mp.solutions.face_mesh
@@ -83,9 +84,10 @@ def send_whatsapp_message(message):
     except Exception as e:
         print("Error al enviar WhatsApp:", e)
 
+# Ruta para recibir imagen binaria directa del ESP32-CAM
 @app.route('/recibir', methods=['POST'])
 def recibir():
-    # ✅ Recibe imagen binaria directa (sin campo 'foto')
+    # ✅ Recibe imagen binaria (no multipart/form-data)
     raw_image = request.get_data()
     if not raw_image:
         return jsonify({"error": "No se recibió ninguna imagen"}), 400
@@ -122,11 +124,8 @@ def recibir():
     send_whatsapp_message("❗ Timbre activado. Rostro NO reconocido.")
     return jsonify({"resultado": "Rostro no reconocido"}), 200
 
+# Lanzar servidor Flask
 if __name__ == '__main__':
     os.makedirs("imagenes_recibidas", exist_ok=True)
     app.run(host='0.0.0.0', port=5000)
 
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
