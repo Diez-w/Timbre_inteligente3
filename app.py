@@ -10,7 +10,6 @@ import io
 
 app = Flask(__name__)
 
-# Inicialización de MediaPipe
 mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh = mp.solutions.face_mesh
@@ -18,7 +17,7 @@ mp_face_mesh = mp.solutions.face_mesh
 known_faces = {}
 face_detector = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
 
-# Cargar rostros conocidos desde la carpeta base_rostros
+# Cargar rostros conocidos desde la carpeta base_rostros (recortados)
 def load_known_faces():
     for filename in os.listdir("base_rostros"):
         if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -27,18 +26,24 @@ def load_known_faces():
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             results = face_detector.process(img_rgb)
             if results.detections:
-                known_faces[filename] = img_rgb
+                bbox = results.detections[0].location_data.relative_bounding_box
+                ih, iw, _ = img.shape
+                x, y, w, h = int(bbox.xmin * iw), int(bbox.ymin * ih), \
+                             int(bbox.width * iw), int(bbox.height * ih)
+                rostro_recortado = img[y:y+h, x:x+w]
+                rostro_recortado = cv2.resize(rostro_recortado, (150, 150))  # normalizar tamaño
+                known_faces[filename] = rostro_recortado
             else:
                 print(f"No se detectó rostro en {filename}")
 
 load_known_faces()
 
-# Comparar dos imágenes usando histogramas como método simple
+# Comparar dos imágenes de rostro recortado
 def is_match(face1, face2):
-    hist1 = cv2.calcHist([face1], [0], None, [256], [0, 256])
-    hist2 = cv2.calcHist([face2], [0], None, [256], [0, 256])
-    score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
-    return score > 0.8
+    face1 = cv2.resize(face1, (150, 150))
+    face2 = cv2.resize(face2, (150, 150))
+    diff = np.linalg.norm(face1.astype("float32") - face2.astype("float32"))
+    return diff < 80  # umbral ajustable
 
 # Detectar guiño usando MediaPipe FaceMesh
 def detectar_guiño(imagen):
@@ -76,7 +81,6 @@ def detectar_guiño(imagen):
 def send_whatsapp_message(message):
     phone_number = "+51902697385"
     apikey = "2408114"
-
     url = f"https://api.callmebot.com/whatsapp.php?phone={phone_number}&text={message}&apikey={apikey}"
     try:
         response = requests.get(url)
@@ -84,10 +88,8 @@ def send_whatsapp_message(message):
     except Exception as e:
         print("Error al enviar WhatsApp:", e)
 
-# Ruta para recibir imagen binaria directa del ESP32-CAM
 @app.route('/recibir', methods=['POST'])
 def recibir():
-    # ✅ Recibe imagen binaria (no multipart/form-data)
     raw_image = request.get_data()
     if not raw_image:
         return jsonify({"error": "No se recibió ninguna imagen"}), 400
@@ -106,15 +108,16 @@ def recibir():
         return jsonify({"resultado": "No se detectó ningún rostro"}), 200
 
     for detection in results.detections:
-        bboxC = detection.location_data.relative_bounding_box
+        bbox = detection.location_data.relative_bounding_box
         ih, iw, _ = frame.shape
-        x, y, w, h = int(bboxC.xmin * iw), int(bboxC.ymin * ih), \
-                     int(bboxC.width * iw), int(bboxC.height * ih)
+        x, y, w, h = int(bbox.xmin * iw), int(bbox.ymin * ih), \
+                     int(bbox.width * iw), int(bbox.height * ih)
         face_img = frame[y:y+h, x:x+w]
+        face_img = cv2.resize(face_img, (150, 150))
 
-        for name, known_img in known_faces.items():
-            if is_match(face_img, known_img):
-                if detectar_guiño(frame_rgb):
+        for name, known_face in known_faces.items():
+            if is_match(face_img, known_face):
+                if detectar_guiño(frame):
                     send_whatsapp_message(f"⚠️ Timbre activado. Rostro reconocido: {name}. Se detectó un GUIÑO (posible emergencia).")
                     return jsonify({"resultado": f"Rostro reconocido: {name}. GUIÑO detectado."}), 200
                 else:
@@ -124,8 +127,6 @@ def recibir():
     send_whatsapp_message("❗ Timbre activado. Rostro NO reconocido.")
     return jsonify({"resultado": "Rostro no reconocido"}), 200
 
-# Lanzar servidor Flask
 if __name__ == '__main__':
     os.makedirs("imagenes_recibidas", exist_ok=True)
     app.run(host='0.0.0.0', port=5000)
-
