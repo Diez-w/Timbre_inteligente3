@@ -6,6 +6,7 @@ import mediapipe as mp
 from PIL import Image
 from datetime import datetime
 import requests
+import io
 
 app = Flask(__name__)
 
@@ -70,10 +71,10 @@ def detectar_guiño(imagen):
 
         return False
 
-# Función para enviar mensaje por WhatsApp usando CallMeBot
+# Enviar mensaje por WhatsApp usando CallMeBot
 def send_whatsapp_message(message):
-    phone_number = "+51902697385"  # ✅ Cambia esto por tu número con código de país
-    apikey = "2408114"    # ✅ Ingresa tu APIKEY de CallMeBot
+    phone_number = "+51902697385"
+    apikey = "2408114"
 
     url = f"https://api.callmebot.com/whatsapp.php?phone={phone_number}&text={message}&apikey={apikey}"
     try:
@@ -84,14 +85,18 @@ def send_whatsapp_message(message):
 
 @app.route('/recibir', methods=['POST'])
 def recibir():
-    if 'foto' not in request.files:
+    # ✅ Recibe imagen binaria directa (sin campo 'foto')
+    raw_image = request.get_data()
+    if not raw_image:
         return jsonify({"error": "No se recibió ninguna imagen"}), 400
 
-    file = request.files['foto']
-    img = Image.open(file.stream).convert('RGB')
+    try:
+        img = Image.open(io.BytesIO(raw_image)).convert('RGB')
+    except Exception as e:
+        return jsonify({"error": "Error al procesar imagen"}), 400
+
     frame = np.array(img)
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
     results = face_detector.process(frame_rgb)
 
     if not results.detections:
@@ -120,6 +125,7 @@ def recibir():
 if __name__ == '__main__':
     os.makedirs("imagenes_recibidas", exist_ok=True)
     app.run(host='0.0.0.0', port=5000)
+
 
 
 if __name__ == '__main__':
