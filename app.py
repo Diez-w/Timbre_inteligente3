@@ -144,7 +144,10 @@ def recibir():
     if not results.detections:
         send_whatsapp_message("🚫 Timbre activado. No se detectó ningún rostro.")
         print("No se detectó rostro en la imagen recibida.")
-        return jsonify({"resultado": "No se detectó ningún rostro"}), 200
+        return jsonify({
+            "resultado": "No se detectó ningún rostro",
+            "status": "no_reconocido"
+        }), 200
 
     for detection in results.detections:
         bboxC = detection.location_data.relative_bounding_box
@@ -165,15 +168,24 @@ def recibir():
                 if detectar_guiño(frame_rgb):
                     send_whatsapp_message(f"⚠️ Timbre activado. Rostro reconocido: {name}. Se detectó un GUIÑO (posible emergencia).")
                     print(f"GUIÑO detectado para {name}")
-                    return jsonify({"resultado": f"Rostro reconocido: {name}. GUIÑO detectado."}), 200
+                    return jsonify({
+                        "resultado": f"Rostro reconocido: {name}. GUIÑO detectado.",
+                        "status": "guiño"
+                    }), 200
                 else:
                     send_whatsapp_message(f"✅ Timbre activado. Rostro reconocido: {name}. Sin guiño.")
                     print(f"Rostro reconocido sin guiño: {name}")
-                    return jsonify({"resultado": f"Rostro reconocido: {name}. Sin guiño."}), 200
+                    return jsonify({
+                        "resultado": f"Rostro reconocido: {name}. Sin guiño.",
+                        "status": "reconocido"
+                    }), 200
 
     send_whatsapp_message("❗ Timbre activado. Rostro NO reconocido.")
     print("No se reconoció ningún rostro después de comparar con la base.")
-    return jsonify({"resultado": "Rostro no reconocido"}), 200
+    return jsonify({
+        "resultado": "Rostro no reconocido",
+        "status": "no_reconocido"
+    }), 200
 
 if __name__ == '__main__':
     os.makedirs("imagenes_recibidas", exist_ok=True)
