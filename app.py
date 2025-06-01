@@ -16,6 +16,20 @@ face_detector = mp_face_detection.FaceDetection(model_selection=0, min_detection
 
 known_faces = {}
 
+def preprocess_image(img):
+    """Mejora imágenes de baja calidad del ESP32-CAM"""
+    # Convertir a escala de grises para el procesamiento
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Ecualización de histograma para mejorar contraste
+    gray = cv2.equalizeHist(gray)
+    
+    # Reducción de ruido (ajustar según necesidad)
+    gray = cv2.medianBlur(gray, 3)
+    
+    # Convertir de vuelta a BGR para MediaPipe
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
 def extract_landmarks(img):
     with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True) as face_mesh:
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -31,6 +45,7 @@ def load_known_faces():
         if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             img_path = os.path.join("base_rostros", filename)
             img = cv2.imread(img_path)
+            img = preprocess_image(img)  # Preprocesar imágenes de referencia también
             landmarks = extract_landmarks(img)
             if landmarks is not None:
                 known_faces[filename] = landmarks
@@ -38,13 +53,28 @@ def load_known_faces():
             else:
                 print(f"No se detectó rostro en {filename}")
 
-def is_match(input_landmarks, known_landmarks, threshold=0.10):
+def is_match(input_landmarks, known_landmarks, threshold=0.15):
     if input_landmarks is None or known_landmarks is None:
         return False
-    if input_landmarks.shape != known_landmarks.shape:
-        return False
-    dist = np.linalg.norm(input_landmarks - known_landmarks)
-    print(f"Distancia de comparación: {dist:.4f}")
+    
+    # Normalización de landmarks
+    def normalize_landmarks(landmarks):
+        centroid = np.mean(landmarks, axis=0)
+        normalized = landmarks - centroid
+        # Escala basada en la distancia entre los ojos (índices 133 y 362 en MediaPipe)
+        eye_dist = np.linalg.norm(normalized[133] - normalized[362])
+        if eye_dist > 0:
+            normalized /= eye_dist
+        return normalized
+    
+    input_norm = normalize_landmarks(input_landmarks)
+    known_norm = normalize_landmarks(known_landmarks)
+    
+    # Solo comparamos landmarks clave (ojos, nariz, boca)
+    key_indices = [33, 133, 362, 263, 1, 4, 5, 195, 197]  # Puntos faciales importantes
+    dist = np.mean(np.linalg.norm(input_norm[key_indices] - known_norm[key_indices], axis=1))
+    
+    print(f"Distancia normalizada: {dist:.4f} (Umbral: {threshold})")
     return dist < threshold
 
 def detectar_guiño(imagen):
@@ -101,7 +131,8 @@ def recibir():
         return jsonify({"error": "Error al procesar imagen"}), 400
 
     frame = np.array(img)
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    frame = preprocess_image(frame)  # Aplicar preprocesamiento
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_detector.process(frame_rgb)
 
     if not results.detections:
@@ -117,7 +148,7 @@ def recibir():
 
         print(f"Rostro detectado: bbox=({x},{y},{w},{h}), tamaño recorte={face_img.shape}")
 
-        input_landmarks = extract_landmarks(face_img)
+        input_landmarks = extract_landmarks(frame)  # Procesar imagen completa
         if input_landmarks is None:
             print("No se pudo extraer landmarks del rostro detectado")
             continue
