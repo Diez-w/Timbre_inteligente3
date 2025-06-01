@@ -33,7 +33,7 @@ def is_match(input_landmarks, known_landmarks):
     if len(input_landmarks) != len(known_landmarks):
         return False
     dist = np.linalg.norm(input_landmarks - known_landmarks)
-    return dist < 0.08  # Umbral ajustable (cuanto menor, más estricta la comparación)
+    return dist < 0.12  # Umbral ajustable (cuanto menor, más estricta la comparación)
 
 # Cargar imágenes base
 def load_known_faces():
