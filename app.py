@@ -86,25 +86,31 @@ def detectar_guiño(imagen):
             return False
 
         landmarks = results.multi_face_landmarks[0].landmark
-
-        right_eye_ids = [33, 159, 160, 158, 144, 153]
-        left_eye_ids = [263, 386, 387, 385, 373, 380]
+        
+        # Puntos de referencia para ojos (MediaPipe 468 landmarks)
+        left_eye = [362, 385, 387, 263, 373, 380]
+        right_eye = [33, 160, 158, 133, 153, 144]
 
         def eye_aspect_ratio(eye_points):
-            A = np.linalg.norm(np.array([landmarks[eye_points[1]].x, landmarks[eye_points[1]].y]) -
-                               np.array([landmarks[eye_points[5]].x, landmarks[eye_points[5]].y]))
-            B = np.linalg.norm(np.array([landmarks[eye_points[2]].x, landmarks[eye_points[2]].y]) -
-                               np.array([landmarks[eye_points[4]].x, landmarks[eye_points[4]].y]))
-            C = np.linalg.norm(np.array([landmarks[eye_points[0]].x, landmarks[eye_points[0]].y]) -
-                               np.array([landmarks[eye_points[3]].x, landmarks[eye_points[3]].y]))
-            ear = (A + B) / (2.0 * C)
+            # Distancias verticales
+            v1 = np.linalg.norm([landmarks[eye_points[1]].x - landmarks[eye_points[5]].x,
+                                landmarks[eye_points[1]].y - landmarks[eye_points[5]].y])
+            v2 = np.linalg.norm([landmarks[eye_points[2]].x - landmarks[eye_points[4]].x,
+                                landmarks[eye_points[2]].y - landmarks[eye_points[4]].y])
+            # Distancia horizontal
+            h = np.linalg.norm([landmarks[eye_points[0]].x - landmarks[eye_points[3]].x,
+                               landmarks[eye_points[0]].y - landmarks[eye_points[3]].y])
+            ear = (v1 + v2) / (2.0 * h)
             return ear
 
-        left_ear = eye_aspect_ratio(left_eye_ids)
-        right_ear = eye_aspect_ratio(right_eye_ids)
+        # Umbrales ajustados
+        ear_left = eye_aspect_ratio(left_eye)
+        ear_right = eye_aspect_ratio(right_eye)
+        ear_diff = abs(ear_left - ear_right)
 
-        # Ajusta estos umbrales si es necesario
-        if (left_ear < 0.22 and right_ear > 0.25) or (right_ear < 0.22 and left_ear > 0.25):
+        # Condición mejorada para guiño
+        if (ear_left < 0.18 and ear_right > 0.25 and ear_diff > 0.15) or \
+           (ear_right < 0.18 and ear_left > 0.25 and ear_diff > 0.15):
             return True
 
         return False
